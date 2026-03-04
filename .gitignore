@@ -1,0 +1,50 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyd
+*.pyo
+*.env
+
+# Distribution / packaging
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Editors
+.vscode/
+.idea/
+
+# MyPy
+.mypy_cache/
+
+# Tests
+.pytest_cache/
+
+# Virtual environment
+virtualenv/
+virtual-env/
+virtualenv-*
+venv/
+*.venv
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# OS generated files
+.DS_Store
+thumbs.db
+
+# Logs
+*.log
+
+# Data files
+*.csv
+*.xlsx
+*.json
+*.sqlite
+
+# Specific to this project
+temp_test_data.csv
+temp_empty_data.csv
