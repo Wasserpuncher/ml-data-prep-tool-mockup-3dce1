@@ -9,6 +9,25 @@ import logging
 # Konfiguriere das Logging-System für die Ausgabe von Informationen und Fehlern.
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+
+def _is_categorical_like(series: pd.Series) -> bool:
+    """
+    Returns True if the given series should be treated as a categorical (text)
+    feature for one-hot encoding.
+
+    Robust across pandas versions: pandas 3.0 introduced a dedicated ``str``
+    dtype for text columns, so ``is_object_dtype`` alone (True only for the
+    legacy ``object`` dtype) no longer detects them. We therefore also accept
+    the string dtype and the categorical dtype. Numeric, boolean and datetime
+    columns return False.
+    """
+    dtype = series.dtype
+    return (
+        pd.api.types.is_object_dtype(dtype)
+        or pd.api.types.is_string_dtype(dtype)
+        or isinstance(dtype, pd.CategoricalDtype)
+    )
+
 class DataPreprocessor:
     """
     Eine Klasse zum Vorverarbeiten von Daten für Machine-Learning-Modelle.
@@ -223,11 +242,11 @@ class DataPreprocessor:
         # Ermittle die Spalten, die kodiert werden sollen.
         if columns is None:
             # Wähle nur kategoriale Spalten für die Kodierung.
-            categorical_cols = df_copy.select_dtypes(include=['object', 'category']).columns.tolist()
+            categorical_cols = [col for col in df_copy.columns if _is_categorical_like(df_copy[col])]
             cols_to_encode = categorical_cols
         else:
             # Stelle sicher, dass die angegebenen Spalten im DataFrame existieren und kategorial sind.
-            cols_to_encode = [col for col in columns if col in df_copy.columns and (pd.api.types.is_object_dtype(df_copy[col]) or pd.api.types.is_categorical_dtype(df_copy[col]))]
+            cols_to_encode = [col for col in columns if col in df_copy.columns and _is_categorical_like(df_copy[col])]
             if len(cols_to_encode) != len(columns):
                 logging.warning("Nicht alle angegebenen Spalten für die Kodierung gefunden oder kategorial. Nur vorhandene kategoriale Spalten werden verwendet.")
 
@@ -273,7 +292,7 @@ class DataPreprocessor:
 
         # Schritt 1: Numerische und kategoriale Spalten identifizieren
         numeric_cols = processed_df.select_dtypes(include=['number']).columns.tolist()
-        categorical_cols = processed_df.select_dtypes(include=['object', 'category']).columns.tolist()
+        categorical_cols = [col for col in processed_df.columns if _is_categorical_like(processed_df[col])]
 
         # Schritt 2: Fehlende Werte behandeln
         if numeric_cols:

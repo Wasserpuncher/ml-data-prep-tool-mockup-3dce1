@@ -53,8 +53,8 @@ class TestDataPreprocessor(unittest.TestCase):
         """
         # Kopiere den DataFrame und fülle zuerst fehlende Werte, da StandardScaler keine NaNs handhaben kann.
         df_temp = self.df.copy()
-        df_temp['numeric_feature_1'].fillna(df_temp['numeric_feature_1'].mean(), inplace=True)
-        df_temp['numeric_feature_2'].fillna(df_temp['numeric_feature_2'].mean(), inplace=True)
+        df_temp['numeric_feature_1'] = df_temp['numeric_feature_1'].fillna(df_temp['numeric_feature_1'].mean())
+        df_temp['numeric_feature_2'] = df_temp['numeric_feature_2'].fillna(df_temp['numeric_feature_2'].mean())
 
         df_processed = self.preprocessor.scale_features(df_temp, columns=['numeric_feature_1', 'numeric_feature_2'])
 
@@ -63,8 +63,11 @@ class TestDataPreprocessor(unittest.TestCase):
         self.assertAlmostEqual(df_processed['numeric_feature_2'].mean(), 0.0, places=5)
 
         # Überprüfe, ob die Standardabweichung der skalierten Spalten nahe Eins ist.
-        self.assertAlmostEqual(df_processed['numeric_feature_1'].std(), 1.0, places=5)
-        self.assertAlmostEqual(df_processed['numeric_feature_2'].std(), 1.0, places=5)
+        # StandardScaler normiert auf die Populations-Standardabweichung (ddof=0) == 1.
+        # pandas' .std() nutzt standardmäßig ddof=1 (Stichprobe) und ergäbe sqrt(n/(n-1)),
+        # daher muss hier explizit ddof=0 gemessen werden, um die korrekte Eigenschaft zu prüfen.
+        self.assertAlmostEqual(df_processed['numeric_feature_1'].std(ddof=0), 1.0, places=5)
+        self.assertAlmostEqual(df_processed['numeric_feature_2'].std(ddof=0), 1.0, places=5)
 
     def test_encode_categorical_one_hot_encoder(self):
         """
@@ -85,9 +88,10 @@ class TestDataPreprocessor(unittest.TestCase):
         self.assertIn('categorical_feature_B_Z', df_processed.columns)
 
         # Überprüfe die Anzahl der Spalten nach der Kodierung.
-        # Original: 6 Spalten. Entfernt: 2. Hinzugefügt: 3 (A) + 3 (B) = 6. Gesamt: 6 - 2 + 6 = 10.
-        # Target-Spalte bleibt erhalten.
-        self.assertEqual(df_processed.shape[1], 10)
+        # Original: 5 Spalten (numeric_feature_1, numeric_feature_2, categorical_feature_A,
+        # categorical_feature_B, target). Entfernt: 2 kategoriale. Hinzugefügt: 3 (A) + 3 (B) = 6.
+        # Gesamt: 5 - 2 + 6 = 9. Die numerischen Spalten und die Target-Spalte bleiben erhalten.
+        self.assertEqual(df_processed.shape[1], 9)
 
         # Überprüfe, ob die Summe der One-Hot-Spalten pro Zeile 1 ist (für jede ursprüngliche Spalte).
         self.assertTrue(all(df_processed[['categorical_feature_A_A', 'categorical_feature_A_B', 'categorical_feature_A_C']].sum(axis=1) == 1))
@@ -106,8 +110,9 @@ class TestDataPreprocessor(unittest.TestCase):
         # Beachte, dass die Namen der numerischen Spalten gleich bleiben.
         self.assertAlmostEqual(df_processed['numeric_feature_1'].mean(), 0.0, places=5)
         self.assertAlmostEqual(df_processed['numeric_feature_2'].mean(), 0.0, places=5)
-        self.assertAlmostEqual(df_processed['numeric_feature_1'].std(), 1.0, places=5)
-        self.assertAlmostEqual(df_processed['numeric_feature_2'].std(), 1.0, places=5)
+        # StandardScaler normiert auf die Populations-Standardabweichung (ddof=0) == 1.
+        self.assertAlmostEqual(df_processed['numeric_feature_1'].std(ddof=0), 1.0, places=5)
+        self.assertAlmostEqual(df_processed['numeric_feature_2'].std(ddof=0), 1.0, places=5)
 
         # Überprüfe, dass die kategorialen Spalten kodiert wurden.
         self.assertNotIn('categorical_feature_A', df_processed.columns)
@@ -188,7 +193,8 @@ class TestDataPreprocessor(unittest.TestCase):
         # Es sollten nur die numerischen Operationen durchgeführt werden.
         self.assertFalse(processed_df.isnull().any().any())
         self.assertAlmostEqual(processed_df['num1'].mean(), 0.0, places=5)
-        self.assertAlmostEqual(processed_df['num1'].std(), 1.0, places=5)
+        # StandardScaler normiert auf die Populations-Standardabweichung (ddof=0) == 1.
+        self.assertAlmostEqual(processed_df['num1'].std(ddof=0), 1.0, places=5)
         self.assertEqual(processed_df.shape[1], 2)
 
 
