@@ -17,6 +17,7 @@ Developed with best practices in mind, this mockup demonstrates a clean, object-
 *   **Feature Scaling**: Standardize numerical features using `StandardScaler`.
 *   **Categorical Encoding**: Convert categorical variables into numerical representations using `OneHotEncoder`.
 *   **Pipeline Integration**: Combine multiple preprocessing steps into a single, cohesive workflow.
+*   **JSON Configuration File**: Define strategies, the exact columns to scale/encode, and which steps to run in a `config.json` — loaded via `--config` or an auto-detected `config.json`.
 *   **Robust Error Handling**: Graceful error management for file operations and data transformations.
 *   **Logging**: Detailed logging for monitoring processing steps and debugging.
 *   **Object-Oriented Design**: Clean, modular, and extensible codebase.
@@ -89,6 +90,56 @@ print(processed_df)
 # except FileNotFoundError:
 #     print("Make sure 'path/to/your_data.csv' exists for file loading example.")
 ```
+
+## ⚙️ Configuration File
+
+Instead of hard-coding strategies and column lists, you can describe a pipeline
+in a JSON configuration file and let the tool load it. Every field is optional
+and falls back to the previous default behaviour when omitted.
+
+```json
+{
+    "missing_strategy": "median",
+    "scaler_strategy": "standard",
+    "encoder_strategy": "onehot",
+    "numeric_columns": ["age", "income"],
+    "categorical_columns": ["city"],
+    "steps": ["impute", "scale", "encode"]
+}
+```
+
+*   `missing_strategy`: `mean` | `median` | `most_frequent`.
+*   `scaler_strategy`: `standard`.
+*   `encoder_strategy`: `onehot`.
+*   `numeric_columns` / `categorical_columns`: explicit column lists to process.
+    Omit them (or use `null`) to auto-detect columns by dtype, exactly as before.
+*   `steps`: any subset of `impute`, `scale`, `encode`, run in the given order.
+    Omit it to run all three.
+
+Unknown keys, invalid steps, and wrong value types are rejected with a clear
+error so typos surface immediately.
+
+Use it from the command line:
+
+```bash
+# Process a CSV with a config and write the result:
+python main.py --config config.json --input data.csv --output processed.csv
+
+# If a config.json exists in the current directory, --config can be omitted:
+python main.py --input data.csv
+```
+
+Or programmatically:
+
+```python
+from main import DataPreprocessor
+
+preprocessor = DataPreprocessor.from_config('config.json')
+processed_df = preprocessor.preprocess(df)
+```
+
+Running `python main.py` with no config and no input still runs the built-in
+demo (the previous default behaviour).
 
 ## 📚 Documentation
 

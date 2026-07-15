@@ -1,3 +1,6 @@
+import argparse
+import json
+import os
 import pandas as pd
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.impute import SimpleImputer
@@ -8,6 +11,123 @@ import logging
 
 # Konfiguriere das Logging-System für die Ausgabe von Informationen und Fehlern.
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Standardname der JSON-Konfigurationsdatei, die gesucht wird, wenn kein
+# expliziter Pfad angegeben wurde.
+# Default name of the JSON configuration file searched for when no explicit
+# path is provided.
+DEFAULT_CONFIG_FILENAME = "config.json"
+
+# Erlaubte Schlüssel in der Konfigurationsdatei. Unbekannte Schlüssel werden
+# abgelehnt, damit Tippfehler nicht stillschweigend ignoriert werden.
+# Allowed keys in the configuration file. Unknown keys are rejected so that
+# typos are not silently ignored.
+_ALLOWED_CONFIG_KEYS = {
+    "missing_strategy",
+    "scaler_strategy",
+    "encoder_strategy",
+    "numeric_columns",
+    "categorical_columns",
+    "steps",
+}
+
+# Gültige Vorverarbeitungsschritte in ihrer kanonischen Ausführungsreihenfolge.
+# Valid preprocessing steps in their canonical execution order.
+_VALID_STEPS = ("impute", "scale", "encode")
+
+
+def load_config(config_path: str) -> Dict[str, Any]:
+    """
+    Lädt eine JSON-Konfigurationsdatei für die Vorverarbeitung und validiert sie.
+    Loads and validates a JSON preprocessing configuration file.
+
+    Alle Schlüssel sind optional; fehlt einer, gilt das Standardverhalten:
+    All keys are optional; a missing key falls back to the default behaviour:
+
+        - ``missing_strategy`` (str): 'mean' | 'median' | 'most_frequent'.
+        - ``scaler_strategy`` (str): 'standard'.
+        - ``encoder_strategy`` (str): 'onehot'.
+        - ``numeric_columns`` (list[str] | null): Spalten, die imputiert und
+          skaliert werden. ``null``/fehlt => automatische Erkennung.
+        - ``categorical_columns`` (list[str] | null): Spalten, die kodiert
+          werden. ``null``/fehlt => automatische Erkennung.
+        - ``steps`` (list[str]): Teilmenge von ['impute', 'scale', 'encode'];
+          fehlt => alle drei Schritte werden ausgeführt.
+
+    Args:
+        config_path (str): Pfad zur JSON-Konfigurationsdatei.
+
+    Returns:
+        Dict[str, Any]: Das validierte Konfigurations-Dictionary.
+
+    Raises:
+        FileNotFoundError: Wenn die Datei nicht existiert.
+        ValueError: Bei ungültigem JSON, unbekannten Schlüsseln oder
+            unzulässigen Werttypen/-werten.
+    """
+    if not os.path.isfile(config_path):
+        raise FileNotFoundError(
+            f"Konfigurationsdatei '{config_path}' wurde nicht gefunden."
+        )
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        try:
+            raw = json.load(f)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Konfigurationsdatei '{config_path}' enthält kein gültiges JSON: {exc}"
+            ) from exc
+
+    if not isinstance(raw, dict):
+        raise ValueError(
+            "Die Konfiguration muss ein JSON-Objekt (Dictionary) auf oberster Ebene sein."
+        )
+
+    unknown = set(raw) - _ALLOWED_CONFIG_KEYS
+    if unknown:
+        raise ValueError(
+            "Unbekannte Konfigurationsschlüssel: "
+            + ", ".join(sorted(unknown))
+            + ". Erlaubt sind: "
+            + ", ".join(sorted(_ALLOWED_CONFIG_KEYS))
+            + "."
+        )
+
+    # String-Strategien validieren.
+    # Validate string strategy fields.
+    for key in ("missing_strategy", "scaler_strategy", "encoder_strategy"):
+        if key in raw and not isinstance(raw[key], str):
+            raise ValueError(
+                f"Konfigurationswert für '{key}' muss eine Zeichenkette sein."
+            )
+
+    # Spaltenlisten validieren (Liste von Strings oder null).
+    # Validate column lists (list of strings or null).
+    for key in ("numeric_columns", "categorical_columns"):
+        if key in raw and raw[key] is not None:
+            value = raw[key]
+            if not isinstance(value, list) or not all(isinstance(c, str) for c in value):
+                raise ValueError(
+                    f"'{key}' muss eine Liste von Spaltennamen (Strings) oder null sein."
+                )
+
+    # Schritte validieren.
+    # Validate steps.
+    if "steps" in raw:
+        steps = raw["steps"]
+        if not isinstance(steps, list) or not all(isinstance(s, str) for s in steps):
+            raise ValueError("'steps' muss eine Liste von Strings sein.")
+        invalid = [s for s in steps if s not in _VALID_STEPS]
+        if invalid:
+            raise ValueError(
+                "Ungültige Schritte: "
+                + ", ".join(invalid)
+                + ". Erlaubt sind: "
+                + ", ".join(_VALID_STEPS)
+                + "."
+            )
+
+    return raw
 
 
 def _is_categorical_like(series: pd.Series) -> bool:
@@ -48,7 +168,10 @@ class DataPreprocessor:
         self,
         missing_strategy: str = 'mean',
         scaler_strategy: str = 'standard',
-        encoder_strategy: str = 'onehot'
+        encoder_strategy: str = 'onehot',
+        numeric_columns: Optional[List[str]] = None,
+        categorical_columns: Optional[List[str]] = None,
+        steps: Optional[List[str]] = None
     ):
         """
         Initialisiert den DataPreprocessor mit den angegebenen Strategien.
@@ -57,9 +180,19 @@ class DataPreprocessor:
             missing_strategy (str): Strategie für fehlende Werte ('mean', 'median', 'most_frequent').
             scaler_strategy (str): Strategie für numerische Skalierung ('standard', 'minmax').
             encoder_strategy (str): Strategie für kategoriale Kodierung ('onehot').
-        
+            numeric_columns (Optional[List[str]]): Explizite Liste numerischer Spalten,
+                die imputiert und skaliert werden sollen. Wenn None, werden numerische
+                Spalten in :meth:`preprocess` automatisch erkannt (bisheriges Verhalten).
+            categorical_columns (Optional[List[str]]): Explizite Liste kategorialer
+                Spalten, die kodiert werden sollen. Wenn None, werden kategoriale
+                Spalten in :meth:`preprocess` automatisch erkannt.
+            steps (Optional[List[str]]): Teilmenge von ['impute', 'scale', 'encode'],
+                die festlegt, welche Schritte :meth:`preprocess` ausführt und in
+                welcher Reihenfolge. Wenn None, werden alle drei Schritte ausgeführt.
+
         Raises:
-            ValueError: Wenn eine unbekannte Strategie angegeben wird.
+            ValueError: Wenn eine unbekannte Strategie oder ein unbekannter Schritt
+                angegeben wird.
         """
         # Überprüfe und setze die Strategien für die Vorverarbeitung.
         if missing_strategy not in ['mean', 'median', 'most_frequent']:
@@ -74,10 +207,57 @@ class DataPreprocessor:
             raise ValueError("Unbekannte encoder_strategy. Wähle 'onehot'.")
         self.encoder_strategy = encoder_strategy
 
+        # Optionale, konfigurationsgetriebene Spaltenauswahl. None bedeutet
+        # automatische Erkennung (das bisherige Standardverhalten).
+        self.numeric_columns = numeric_columns
+        self.categorical_columns = categorical_columns
+
+        # Auszuführende Schritte validieren und festlegen.
+        if steps is None:
+            self.steps = list(_VALID_STEPS)
+        else:
+            invalid = [s for s in steps if s not in _VALID_STEPS]
+            if invalid:
+                raise ValueError(
+                    "Unbekannte Schritte: "
+                    + ", ".join(invalid)
+                    + ". Erlaubt sind: "
+                    + ", ".join(_VALID_STEPS)
+                    + "."
+                )
+            self.steps = list(steps)
+
         # Initialisiere interne Transformer als None, sie werden bei Bedarf gefittet.
         self._fitted_transformers: Dict[str, Any] = {}
-        logging.info("DataPreprocessor initialisiert mit Strategien: Missing=%s, Scaler=%s, Encoder=%s",
-                     self.missing_strategy, self.scaler_strategy, self.encoder_strategy)
+        logging.info("DataPreprocessor initialisiert mit Strategien: Missing=%s, Scaler=%s, Encoder=%s; Schritte=%s",
+                     self.missing_strategy, self.scaler_strategy, self.encoder_strategy, self.steps)
+
+    @classmethod
+    def from_config(cls, config_path: str) -> "DataPreprocessor":
+        """
+        Erstellt einen DataPreprocessor aus einer JSON-Konfigurationsdatei.
+        Creates a DataPreprocessor from a JSON configuration file.
+
+        Die Konfigurationsdatei legt die Strategien, die zu verarbeitenden
+        Spalten und die auszuführenden Schritte fest. Siehe :func:`load_config`
+        für das erwartete Schema. Nicht angegebene Felder behalten ihr
+        Standardverhalten bei.
+
+        Args:
+            config_path (str): Pfad zur JSON-Konfigurationsdatei.
+
+        Returns:
+            DataPreprocessor: Eine gemäß der Konfiguration initialisierte Instanz.
+        """
+        config = load_config(config_path)
+        return cls(
+            missing_strategy=config.get("missing_strategy", "mean"),
+            scaler_strategy=config.get("scaler_strategy", "standard"),
+            encoder_strategy=config.get("encoder_strategy", "onehot"),
+            numeric_columns=config.get("numeric_columns"),
+            categorical_columns=config.get("categorical_columns"),
+            steps=config.get("steps"),
+        )
 
     def _get_imputer(self) -> SimpleImputer:
         """
@@ -276,47 +456,69 @@ class DataPreprocessor:
 
     def preprocess(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Führt eine vollständige Vorverarbeitung des DataFrames durch, einschließlich:
-        1. Behandeln fehlender Werte (numerische Spalten).
-        2. Skalieren numerischer Merkmale.
-        3. Kodieren kategorialer Merkmale.
+        Führt die Vorverarbeitung des DataFrames durch. Welche Schritte laufen
+        (imputieren, skalieren, kodieren) und auf welchen Spalten, richtet sich
+        nach der Konfiguration der Instanz:
+
+        1. Behandeln fehlender Werte (Schritt 'impute', numerische Spalten).
+        2. Skalieren numerischer Merkmale (Schritt 'scale').
+        3. Kodieren kategorialer Merkmale (Schritt 'encode').
+
+        Sind ``numeric_columns`` bzw. ``categorical_columns`` gesetzt, werden
+        genau diese verwendet; andernfalls werden die Spalten automatisch anhand
+        ihres Datentyps erkannt (Standardverhalten). ``steps`` legt fest, welche
+        der drei Schritte in welcher Reihenfolge ausgeführt werden.
 
         Args:
             df (pd.DataFrame): Der Eingabe-DataFrame.
 
         Returns:
-            pd.DataFrame: Der vollständig vorverarbeitete DataFrame.
+            pd.DataFrame: Der vorverarbeitete DataFrame.
         """
-        logging.info("Starte die vollständige Vorverarbeitung des DataFrames.")
+        logging.info("Starte die Vorverarbeitung des DataFrames. Schritte: %s", self.steps)
         processed_df = df.copy()
 
-        # Schritt 1: Numerische und kategoriale Spalten identifizieren
-        numeric_cols = processed_df.select_dtypes(include=['number']).columns.tolist()
-        categorical_cols = [col for col in processed_df.columns if _is_categorical_like(processed_df[col])]
-
-        # Schritt 2: Fehlende Werte behandeln
-        if numeric_cols:
-            processed_df = self.handle_missing(processed_df, columns=numeric_cols)
+        # Schritt 1: Numerische und kategoriale Spalten bestimmen. Explizit
+        # konfigurierte Spalten haben Vorrang; andernfalls automatische Erkennung.
+        if self.numeric_columns is not None:
+            numeric_cols = [col for col in self.numeric_columns if col in processed_df.columns]
+            missing_numeric = [col for col in self.numeric_columns if col not in processed_df.columns]
+            if missing_numeric:
+                logging.warning("Konfigurierte numerische Spalten fehlen im DataFrame und werden übersprungen: %s", missing_numeric)
         else:
-            logging.warning("Keine numerischen Spalten für die Imputation gefunden.")
+            numeric_cols = processed_df.select_dtypes(include=['number']).columns.tolist()
 
-        # Schritt 3: Numerische Merkmale skalieren
-        if numeric_cols:
-            processed_df = self.scale_features(processed_df, columns=numeric_cols)
+        if self.categorical_columns is not None:
+            categorical_cols = [col for col in self.categorical_columns if col in processed_df.columns]
+            missing_categorical = [col for col in self.categorical_columns if col not in processed_df.columns]
+            if missing_categorical:
+                logging.warning("Konfigurierte kategoriale Spalten fehlen im DataFrame und werden übersprungen: %s", missing_categorical)
         else:
-            logging.warning("Keine numerischen Spalten für die Skalierung gefunden.")
+            categorical_cols = [col for col in processed_df.columns if _is_categorical_like(processed_df[col])]
 
-        # Schritt 4: Kategoriale Merkmale kodieren
-        if categorical_cols:
-            processed_df = self.encode_categorical(processed_df, columns=categorical_cols)
-        else:
-            logging.warning("Keine kategorialen Spalten für die Kodierung gefunden.")
+        # Schritt 2: Die konfigurierten Schritte in ihrer Reihenfolge ausführen.
+        for step in self.steps:
+            if step == 'impute':
+                if numeric_cols:
+                    processed_df = self.handle_missing(processed_df, columns=numeric_cols)
+                else:
+                    logging.warning("Keine numerischen Spalten für die Imputation gefunden.")
+            elif step == 'scale':
+                if numeric_cols:
+                    processed_df = self.scale_features(processed_df, columns=numeric_cols)
+                else:
+                    logging.warning("Keine numerischen Spalten für die Skalierung gefunden.")
+            elif step == 'encode':
+                if categorical_cols:
+                    processed_df = self.encode_categorical(processed_df, columns=categorical_cols)
+                else:
+                    logging.warning("Keine kategorialen Spalten für die Kodierung gefunden.")
 
         logging.info("Vorverarbeitung abgeschlossen. End-Shape: %s", processed_df.shape)
         return processed_df
 
 
-if __name__ == "__main__":
+def _run_demo() -> None:
     # Beispielhafte Verwendung des DataPreprocessors.
     # Erstelle einen Dummy-DataFrame für Demonstrationszwecke.
     data = {
@@ -368,3 +570,89 @@ if __name__ == "__main__":
     # processed_df_median = preprocessor_median.preprocess(df_sample.copy())
     # print("\nVerarbeiteter DataFrame (Missing Median):")
     # print(processed_df_median)
+
+
+def main(argv: Optional[list] = None) -> int:
+    """
+    Kommandozeilen-Einstiegspunkt für das Vorverarbeitungswerkzeug.
+    Command-line entry point for the preprocessing tool.
+
+    Mit ``--config`` wird eine JSON-Konfigurationsdatei geladen, die Strategien,
+    Spalten und Schritte festlegt (siehe :func:`load_config`). Ohne ``--config``
+    wird nach einer ``config.json`` im aktuellen Verzeichnis gesucht. Wird eine
+    Konfiguration gefunden, kann mit ``--input`` ein CSV-Datensatz verarbeitet
+    und optional mit ``--output`` gespeichert werden. Ohne Konfiguration und
+    ohne Eingabedatei wird die eingebaute Demo ausgeführt.
+
+    With ``--config`` a JSON configuration file is loaded that defines
+    strategies, columns, and steps (see :func:`load_config`). Without
+    ``--config`` the tool looks for a ``config.json`` in the current directory.
+    When a configuration is found, ``--input`` can process a CSV dataset and
+    ``--output`` optionally stores the result. Without configuration and without
+    an input file the built-in demo runs.
+
+    Args:
+        argv (Optional[list]): Argumentliste (für Tests). Standardmäßig
+            ``sys.argv[1:]``.
+
+    Returns:
+        int: Exit-Code (0 bei Erfolg, ungleich 0 bei Fehler).
+    """
+    parser = argparse.ArgumentParser(
+        description="ML Data Preprocessing Tool: konfigurierbare Vorverarbeitung von CSV-Daten."
+    )
+    parser.add_argument(
+        "-c", "--config", metavar="PATH", default=None,
+        help=(
+            "Pfad zu einer JSON-Konfigurationsdatei (Strategien, Spalten, Schritte). "
+            f"Ohne Angabe wird '{DEFAULT_CONFIG_FILENAME}' im aktuellen Verzeichnis "
+            "verwendet, falls vorhanden."
+        ),
+    )
+    parser.add_argument(
+        "-i", "--input", metavar="CSV", default=None,
+        help="Pfad zu einer CSV-Eingabedatei, die vorverarbeitet werden soll.",
+    )
+    parser.add_argument(
+        "-o", "--output", metavar="CSV", default=None,
+        help="Optionaler Pfad, unter dem das Ergebnis als CSV gespeichert wird.",
+    )
+    args = parser.parse_args(argv)
+
+    config_path = args.config
+    if config_path is None and os.path.isfile(DEFAULT_CONFIG_FILENAME):
+        config_path = DEFAULT_CONFIG_FILENAME
+
+    # Ohne Konfiguration und ohne Eingabedatei: eingebaute Demo (bisheriges Verhalten).
+    if config_path is None and args.input is None:
+        _run_demo()
+        return 0
+
+    try:
+        if config_path is not None:
+            preprocessor = DataPreprocessor.from_config(config_path)
+            logging.info("Konfiguration aus '%s' geladen.", config_path)
+        else:
+            preprocessor = DataPreprocessor()
+
+        if args.input is None:
+            print("Keine Eingabedatei angegeben (--input). Es wurde nur die Konfiguration validiert.")
+            return 0
+
+        df = preprocessor.load_data(args.input)
+        processed_df = preprocessor.preprocess(df)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Fehler: {exc}")
+        return 1
+
+    if args.output is not None:
+        processed_df.to_csv(args.output, index=False)
+        print(f"Vorverarbeitete Daten nach '{args.output}' geschrieben. Shape: {processed_df.shape}")
+    else:
+        print(processed_df.to_string())
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
