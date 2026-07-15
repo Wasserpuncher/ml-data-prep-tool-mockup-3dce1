@@ -2,7 +2,7 @@
 
 ![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Build Status](https://github.com/your-username/ml-data-prep-tool-mockup/workflows/Python%20application/badge.svg)
+![Build Status](https://github.com/Wasserpuncher/ml-data-prep-tool-mockup-3dce1/workflows/Python%20application/badge.svg)
 
 ## 🌟 Overview
 
@@ -29,7 +29,7 @@ Developed with best practices in mind, this mockup demonstrates a clean, object-
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/your-username/ml-data-prep-tool-mockup.git
+    git clone https://github.com/Wasserpuncher/ml-data-prep-tool-mockup-3dce1.git
     cd ml-data-prep-tool-mockup
     ```
 
